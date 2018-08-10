@@ -34,8 +34,7 @@ class Zmonitor:
     def __init__(
                 self,
                 intervalHours=8, reminderDays=7,
-                emailServer=None,
-                sender=None, recipient=None,
+                server=None, sender=None, recipient=None,
                 filename=None, metaFilename=None
             ):
         """
@@ -48,9 +47,9 @@ class Zmonitor:
             assert isinstance(var, (int, float)), 'Must be int or float'
         self.delta = timedelta(hours=intervalHours)
         self.reminder = timedelta(days=reminderDays)
-        if emailServer:
-            assert isinstance(emailServer, str), 'Must be str or None'
-        self.emailServer = 'smtp.gmail.com' if emailServer is None else emailServer
+        if server:
+            assert isinstance(server, str), 'Must be str or None'
+        self.server = 'smtp.gmail.com' if server is None else server
         for var in (filename, metaFilename):
             if var is not None:
                 assert isinstance(var, str), 'Must be str or None'
@@ -62,10 +61,10 @@ class Zmonitor:
         self.get_contact_info(sender, recipient)
 
     def __str__(self):
-        return '\n'.join([f'{pool}\t{state}' for pool, state in self.index.items()])
+        return '\n'.join(sorted([f'{pool}\t{state}' for pool, state in self.index.items()]))
 
     def __repr__(self):
-        return "'\n'.join([f'{pool}\t{state}' for pool, state in self.index.items()])"
+        return "'\n'.join(sorted([f'{pool}\t{state}' for pool, state in self.index.items()]))"
 
     @property
     def healthy(self):
@@ -73,20 +72,28 @@ class Zmonitor:
         return all(state == 'ONLINE' for state in self.index.values())
 
     @property
-    def degraded_since(self):
-        pass
-
-    @property
     def outstanding(self):
         """
-        Returns True if a given number of time has passed since detecting
-        a degraded pool.  By default, this is once per week.
+        If a given amount of time has passed since detecting
+        a degraded pool, returns a string with the number of
+        days passed.
         """
         if self.lastNotified is not None:
-            return (
-                    (datetime.now() - self.lastNotified > self.reminder)
-                    and not self.healthy
-                )
+            passed = datetime.now() - self.lastNotified
+            if not self.healthy:
+                if passed >= self.reminder:
+                    return passed.strftime('%d days')
+
+    @property
+    def pools(self):
+        return sorted(pool for pool in self.index.keys())
+
+    @property
+    def degraded(self):
+        degraded = []
+        for pool, state in self.index.items():
+            if state != 'ONLINE':
+                degraded.append((pool, state))
 
     @staticmethod
     def subproc(command):
@@ -96,16 +103,6 @@ class Zmonitor:
         """
         proc = Popen(command.split(), stdout=PIPE, stderr=STDOUT)
         return proc.communicate()[0].decode()
-
-    def save_index(self):
-        """
-        Saves the zpool status index to disk as a json file,
-        in case the script stops running
-        or the machine is rebooted.
-        """
-        assert isinstance(self.index, dict), 'Must be dict'
-        with open(self.filename, 'w') as status:
-            dump(self.index, status, sort_keys=True, indent=4)
 
     def get_contact_info(self, sender, recipient):
         if sender:
@@ -118,7 +115,17 @@ class Zmonitor:
             self.recipient = input('Recipient address: ').rstrip()
         self.header = self.sender, self.recipient, gethostname()
         print('Enter sender login information')
-        self.__login__ = getpass('username: '), getpass('password: ')
+        self.__login = getpass('username: '), getpass('password: ')
+
+    def save_index(self):
+        """
+        Saves the zpool status index to disk as a json file,
+        in case the script stops running
+        or the machine is rebooted.
+        """
+        assert isinstance(self.index, dict), 'Must be dict'
+        with open(self.filename, 'w') as status:
+            dump(self.index, status, sort_keys=True, indent=4)
 
     def load_index(self):
         """Loads the index from disk"""
@@ -162,20 +169,26 @@ class Zmonitor:
         """
         Notifies the recipient of the status
         Includes both a summary and the full subprocess output as a string.
+        If outstanding, priority (urgency) level 2 will be set.
         """
         print('Notifying recipient...')
-        message = 'From: {}\nTo: {}\nSubject: Zpool Status on {}\n{}\n\n{}'
-        unabridged = f'Unabridged Status:\n\n{self.out}'
+        message = [
+                'From: {}\nTo: {}\n',
+                'Subject: Zpool Status on {}\n{}\n\n',
+                f'Unabridged Status:\n\n{self.out}'
+            ]
         if self.outstanding:
-            pass
+            message.insert(1, 'X-Priority: 2\n')
+            since = datetime.now() - self.outstanding
+            message.insert(-2, f'Degraded since {since}')
         print('Logging in...')
-        with SMTP(server, timeout=90) as notifier:
+        with SMTP(self.server, timeout=90) as notifier:
             notifier.starttls()
-            notifier.login(self.__login__)
+            notifier.login(self.__login)
             print('Sending message...')
             notifier.sendmail(
                     self.sender, self.recipient,
-                    message.format(*self.header, self.__str__, unabridged)
+                    ''.join(message).format(*self.header, self.__str__)
                 )
             notifier.quit()
             print('Message sent')
