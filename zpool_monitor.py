@@ -32,11 +32,11 @@ class Zmonitor:
     until the zpool status is restored.
     """
     def __init__(
-                self,
-                intervalHours=8, reminderDays=7,
-                server=None, sender=None, recipient=None,
-                filename=None, metaFilename=None
-            ):
+            self,
+            intervalHours=8, reminderDays=7,
+            server=None, sender=None, recipient=None,
+            filename=None, metaFilename=None
+        ):
         """
         intervalHours is the number of hours between each check.
 
@@ -231,3 +231,4 @@ class Zmonitor:
 if __name__ == '__main__':
     monitor = Zmonitor()
     monitor.run()
+
